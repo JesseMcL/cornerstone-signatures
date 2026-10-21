@@ -73,7 +73,7 @@ function designationKeysField(body, allowedOptions) {
   return keys;
 }
 
-export function createApp({ db, auth = {}, microsoftUserResolver, directoryProvider = null, protectedStaffEmails = [], publicRoot = path.resolve('.'), officeAddinRuntimeUrls = [], outlookConfig = {}, requestLimits = {}, trustProxy = false, logger = console }) {
+export function createApp({ db, auth = {}, authRouter = null, microsoftUserResolver, directoryProvider = null, protectedStaffEmails = [], publicRoot = path.resolve('.'), officeAddinRuntimeUrls = [], outlookConfig = {}, requestLimits = {}, trustProxy = false, logger = console }) {
   const app = express();
   if (trustProxy !== false) app.set('trust proxy', trustProxy);
   const protectedStaff = new Set(protectedStaffEmails.map((email) => String(email).toLowerCase()));
@@ -117,6 +117,7 @@ export function createApp({ db, auth = {}, microsoftUserResolver, directoryProvi
     next();
   });
 
+  if (authRouter) app.use('/auth', authRouter);
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/.well-known/microsoft-officeaddins-allowed.json', (_req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
@@ -315,6 +316,7 @@ export function createApp({ db, auth = {}, microsoftUserResolver, directoryProvi
     const staff = getStaffByEmail(db, req.admin.email);
     res.json({
       ...req.admin,
+      ...(auth.logoutUrl && { logoutUrl: auth.logoutUrl }),
       branding: publicBranding(),
       user: staff ? {
         email: staff.email,

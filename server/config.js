@@ -31,8 +31,17 @@ function trustProxySetting() {
   throw new Error('TRUST_PROXY must be true, false, a hop count from 1 to 10, or a comma-separated list of trusted addresses/subnets.');
 }
 
+function authMode() {
+  const mode = String(process.env.AUTH_MODE || 'cloudflare').trim().toLowerCase();
+  if (!['cloudflare', 'entra'].includes(mode)) throw new Error('AUTH_MODE must be cloudflare or entra.');
+  return mode;
+}
+
 export const config = Object.freeze({
   env: process.env.NODE_ENV || 'development',
+  authMode: authMode(),
+  sessionSecret: process.env.SESSION_SECRET,
+  sessionTtlSeconds: boundedInteger('SESSION_TTL_SECONDS', 8 * 60 * 60, 5 * 60, 7 * 24 * 60 * 60),
   port,
   publicBaseUrl,
   officeAddinRuntimeUrls,
@@ -65,9 +74,11 @@ export const config = Object.freeze({
 
 export function assertProductionConfig(value = config) {
   if (value.env !== 'production') return;
+  const browserAuth = value.authMode === 'entra'
+    ? [['MICROSOFT_GRAPH_CLIENT_SECRET', value.microsoftGraphClientSecret], ['SESSION_SECRET', value.sessionSecret]]
+    : [['CLOUDFLARE_TEAM_DOMAIN', value.cloudflareTeamDomain], ['CLOUDFLARE_ACCESS_AUD', value.cloudflareAccessAudience]];
   const required = [
-    ['CLOUDFLARE_TEAM_DOMAIN', value.cloudflareTeamDomain],
-    ['CLOUDFLARE_ACCESS_AUD', value.cloudflareAccessAudience],
+    ...browserAuth,
     ['ADMIN_ALLOWED_ORIGINS', value.adminAllowedOrigins.length],
     ['PUBLIC_BASE_URL', value.publicBaseUrl],
     ['MICROSOFT_CLIENT_ID', value.microsoftClientId],
@@ -78,6 +89,7 @@ export function assertProductionConfig(value = config) {
   ];
   const missing = required.filter(([, setting]) => !setting).map(([name]) => name);
   if (missing.length) throw new Error(`Missing required production configuration: ${missing.join(', ')}`);
+  if (value.authMode === 'entra' && String(value.sessionSecret).length < 32) throw new Error('SESSION_SECRET must be at least 32 characters.');
   for (const setting of [['PUBLIC_BASE_URL', value.publicBaseUrl], ['SOURCE_CODE_URL', value.sourceCodeUrl], ...value.officeAddinRuntimeUrls.map((url) => ['OFFICE_ADDIN_RUNTIME_URLS', url])]) {
     let parsed;
     try { parsed = new URL(setting[1]); } catch { throw new Error(`${setting[0]} must contain absolute URLs.`); }

@@ -1,7 +1,8 @@
 import { createApp } from './app.js';
 import { createMicrosoftUserResolver } from './auth.js';
 import { assertProductionConfig, config } from './config.js';
-import { openDatabase } from './db.js';
+import { openDatabase, resolveStaffEmailForIdentity } from './db.js';
+import { createEntraLogin } from './entra-login.js';
 import { createGraphDirectoryProvider } from './entra.js';
 import { startDirectorySyncScheduler } from './directory-scheduler.js';
 import { startDeploymentScheduler } from './deployment-scheduler.js';
@@ -13,9 +14,21 @@ const directoryProvider = createGraphDirectoryProvider({
   clientId: config.microsoftClientId,
   clientSecret: config.microsoftGraphClientSecret,
 });
+const entraLogin = config.authMode === 'entra' ? createEntraLogin({
+  tenantId: config.microsoftTenantId,
+  clientId: config.microsoftClientId,
+  clientSecret: config.microsoftGraphClientSecret,
+  publicBaseUrl: config.publicBaseUrl,
+  sessionSecret: config.sessionSecret,
+  sessionTtlSeconds: config.sessionTtlSeconds,
+  resolveStaffEmail: (identity) => resolveStaffEmailForIdentity(db, identity),
+}) : null;
 const app = createApp({
   db,
+  authRouter: entraLogin?.router ?? null,
   auth: {
+    identityResolver: entraLogin?.resolveIdentity,
+    logoutUrl: entraLogin ? '/auth/logout' : undefined,
     teamDomain: config.cloudflareTeamDomain,
     audience: config.cloudflareAccessAudience,
     devAuthEmail: config.devAuthEmail,
@@ -36,7 +49,7 @@ const app = createApp({
 const stopDirectoryScheduler = startDirectorySyncScheduler({ db, directoryProvider });
 const stopDeploymentScheduler = startDeploymentScheduler({ db });
 
-const server = app.listen(config.port, () => console.log(`Cornerstone Signatures listening on :${config.port}`));
+const server = app.listen(config.port, () => console.log(`Cornerstone Signatures listening on :${config.port} (browser sign-in: ${config.authMode})`));
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => { stopDirectoryScheduler(); stopDeploymentScheduler(); server.close(() => { db.close(); process.exit(0); }); });
 }

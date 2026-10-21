@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added built-in Microsoft Entra ID sign-in for the browser picker and administration console (`AUTH_MODE=entra`), removing the need for Cloudflare Access. Uses the OpenID Connect authorization code flow with PKCE, the existing app registration and client secret, and an encrypted HttpOnly session cookie.
+- Signed-in users are matched to staff by Entra object ID, and sessions are re-checked on every request so removed, blocked or disabled staff lose access immediately.
+- Added a sign-out link to the administration console when Entra sign-in is enabled.
+- Cloudflare Access remains available as `AUTH_MODE=cloudflare` and is still the default.
+
 ## 2.1.3
 
 - Updated the transitive `source-map-js` development dependency (Dependabot).

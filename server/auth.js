@@ -2,7 +2,11 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { HttpError } from './errors.js';
 import { getRoles } from './db.js';
 
-function createAccessIdentityResolver({ teamDomain, audience, devAuthEmail, env = 'development' }) {
+// Browser identity comes from one of two providers, chosen by AUTH_MODE:
+// - entra: our own Microsoft Entra sign-in session (see entra-login.js), passed in as identityResolver
+// - cloudflare: the Cloudflare Access JWT forwarded by Access
+function createAccessIdentityResolver({ identityResolver, teamDomain, audience, devAuthEmail, env = 'development' }) {
+  if (identityResolver) return identityResolver;
   let jwks;
   if (teamDomain) {
     const issuer = `https://${teamDomain.replace(/^https?:\/\//, '').replace(/\/$/, '')}`;

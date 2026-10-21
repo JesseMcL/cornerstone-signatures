@@ -1,3 +1,18 @@
+// When Microsoft Entra sign-in is enabled, an expired or missing session returns 401 with a
+// loginUrl. Send the browser through sign-in and return to the current page afterwards.
+{
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status !== 401) return response;
+    const body = await response.clone().json().catch(() => ({}));
+    const loginUrl = body?.error?.details?.loginUrl;
+    if (typeof loginUrl !== 'string' || !loginUrl.startsWith('/auth/login')) return response;
+    window.location.assign(`/auth/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`);
+    return new Promise(() => {});
+  };
+}
+
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
 const identity = document.querySelector('#identity');
@@ -105,7 +120,7 @@ function renderNav() {
 
 function renderIdentity() {
   const user=state.session?.user || state.session || {};
-  identity.replaceChildren(avatar(user,'avatar'),el('span',{},el('b',{},userName(user)),el('small',{},roles().has('it_admin')?'IT administrator':'Communications editor')));
+  identity.replaceChildren(avatar(user,'avatar'),el('span',{},el('b',{},userName(user)),el('small',{},roles().has('it_admin')?'IT administrator':'Communications editor')),...(state.session?.logoutUrl?[el('a',{class:'button small subtle',href:state.session.logoutUrl},'Sign out')]:[]));
 }
 
 function renderBranding() {

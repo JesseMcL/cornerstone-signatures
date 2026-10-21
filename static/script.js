@@ -1,3 +1,18 @@
+// When Microsoft Entra sign-in is enabled, an expired or missing session returns 401 with a
+// loginUrl. Send the browser through sign-in and return to the current page afterwards.
+{
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status !== 401) return response;
+    const body = await response.clone().json().catch(() => ({}));
+    const loginUrl = body?.error?.details?.loginUrl;
+    if (typeof loginUrl !== 'string' || !loginUrl.startsWith('/auth/login')) return response;
+    window.location.assign(`/auth/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`);
+    return new Promise(() => {});
+  };
+}
+
 (() => {
   const byId = (id) => document.getElementById(id);
   const select = byId('userSelect');

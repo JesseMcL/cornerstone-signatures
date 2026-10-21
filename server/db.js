@@ -125,6 +125,26 @@ export function getStaffByEmail(db, email) {
   return hydrateStaff(db.prepare(`SELECT * FROM staff WHERE email=? COLLATE NOCASE`).get(String(email).toLowerCase()));
 }
 
+// Maps a signed-in Microsoft identity to a managed staff email. The Entra object ID is preferred
+// because it survives renames and UPN/mail differences. An email match is only accepted when the
+// staff record is not already bound to a different Entra object, and disabled accounts are refused.
+export function resolveStaffEmailForIdentity(db, { oid, emails = [] } = {}) {
+  const usable = (staff) => staff && staff.directory_account_enabled !== 0 ? staff.email.toLowerCase() : null;
+  if (oid) {
+    const byObjectId = db.prepare('SELECT email,directory_account_enabled FROM staff WHERE entra_object_id=?').get(String(oid));
+    if (byObjectId) return usable(byObjectId);
+  }
+  const byEmail = db.prepare('SELECT email,entra_object_id,directory_account_enabled FROM staff WHERE email=? COLLATE NOCASE');
+  for (const email of emails) {
+    if (typeof email !== 'string' || !email.includes('@')) continue;
+    const staff = byEmail.get(email.trim().toLowerCase());
+    if (!staff) continue;
+    if (staff.entra_object_id && oid && staff.entra_object_id !== String(oid)) return null;
+    return usable(staff);
+  }
+  return null;
+}
+
 export function recordSignatureDelivery(db, analytics = null) {
   db.prepare(`INSERT INTO app_settings(key,value_json,updated_by)
     VALUES ('signature_delivery_count','1','outlook')

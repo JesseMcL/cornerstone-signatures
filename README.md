@@ -35,7 +35,7 @@ flowchart LR
     App --> DB[(SQLite on persistent volume)]
     Outlook[Outlook add-in] -->|Microsoft bearer token + From address| App
     App -->|Rendered email-safe HTML| Outlook
-    Browser[Authenticated browser] -->|Cloudflare Access| App
+    Browser[Authenticated browser] -->|Microsoft Entra sign-in or Cloudflare Access| App
 ```
 
 At compose time, Outlook sends the current **From** address to the signature API. The server checks eligibility, finds every active deployment matching that sender, selects the highest-priority one, and merges current staff and organization data into the published template snapshot.
@@ -106,12 +106,12 @@ Deleting a managed record is temporary if it still matches the filters—it retu
 - Docker or another Node 24 deployment environment
 - A persistent filesystem mount at `/app/data`
 - A public HTTPS origin
-- Cloudflare Access for the browser picker and administration interface
+- Browser sign-in for the picker and administration interface: either built-in Microsoft Entra sign-in (`AUTH_MODE=entra`) or Cloudflare Access (`AUTH_MODE=cloudflare`, the default)
 - A single-tenant Microsoft Entra application registration
 - Microsoft Graph `User.Read.All` application permission with tenant-wide admin consent
 - Microsoft 365 administrator access to deploy the Outlook manifest
 
-The Outlook runtime and signature endpoint must be reachable without a Cloudflare Access browser session. The signature endpoint independently validates Microsoft tokens; administrative APIs must remain behind Access.
+With Cloudflare Access, the Outlook runtime and signature endpoint must be reachable without an Access browser session, and administrative APIs must remain behind Access. With Entra sign-in, no external access proxy is needed: the server runs the Microsoft sign-in itself and keeps an encrypted, HttpOnly session cookie. In both modes the signature endpoint independently validates Microsoft tokens.
 
 ## Quick start for development
 
@@ -176,7 +176,9 @@ The canonical list and explanatory comments live in [.env.example](.env.example)
 | --- | --- |
 | Service | `PORT`, `DATABASE_PATH`, `PUBLIC_BASE_URL`, `SOURCE_CODE_URL`, `SUPPORT_EMAIL` |
 | Rate limiting | `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_REQUESTS`, `DATABASE_RATE_LIMIT_WINDOW_MS`, `DATABASE_RATE_LIMIT_MAX_REQUESTS`, `TRUST_PROXY` |
-| Cloudflare Access | `CLOUDFLARE_TEAM_DOMAIN`, `CLOUDFLARE_ACCESS_AUD`, `ADMIN_ALLOWED_ORIGINS` |
+| Browser sign-in | `AUTH_MODE`, `ADMIN_ALLOWED_ORIGINS` |
+| Entra sign-in (`AUTH_MODE=entra`) | `SESSION_SECRET`, optional `SESSION_TTL_SECONDS` |
+| Cloudflare Access (`AUTH_MODE=cloudflare`) | `CLOUDFLARE_TEAM_DOMAIN`, `CLOUDFLARE_ACCESS_AUD` |
 | Microsoft Entra | `MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_API_AUDIENCE`, `MICROSOFT_GRAPH_CLIENT_SECRET` |
 | Outlook add-in | `OUTLOOK_ADDIN_ID`, `OUTLOOK_PROVIDER_NAME`, optional `OFFICE_ADDIN_RUNTIME_URLS` |
 | Bootstrap access | `INITIAL_IT_ADMINS` |
