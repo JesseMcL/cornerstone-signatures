@@ -321,7 +321,7 @@ describe('Cornerstone Signatures backend', () => {
     });
     assert.equal(result.response.status, 200);
     result = await request('/api/admin/directory-sync/run', { method: 'POST', headers: { origin: 'https://signatures.test' } });
-    assert.deepEqual(result.body.result, { fetched: 3, matched: 1, filtered: 2, created: 1, updated: 0 });
+    assert.deepEqual(result.body.result, { fetched: 3, matched: 1, filtered: 2, created: 1, updated: 0, merged: 0, conflicts: 0 });
     let jane = result.body.users.find((user) => user.email === 'jane.doe@example.com');
     assert.equal(jane.title, 'Director');
     assert.equal(jane.office_location, 'Regional Office');

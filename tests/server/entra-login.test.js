@@ -9,6 +9,7 @@ import { createAccessAuthenticator } from '../../server/auth.js';
 import { assertProductionConfig } from '../../server/config.js';
 import { openDatabase, resolveStaffEmailForIdentity } from '../../server/db.js';
 import { createEntraLogin, isGuestIdentity, parseCookies, safeReturnTo } from '../../server/entra-login.js';
+import { DEFAULT_DIRECTORY_FILTERS, syncDirectoryUsers } from '../../server/entra.js';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const CLIENT = '22222222-2222-2222-2222-222222222222';
@@ -277,5 +278,21 @@ describe('Entra sign-in helpers', () => {
     assert.equal(isGuestIdentity({ idp: `https://sts.windows.net/${TENANT}/` }, TENANT), false);
     assert.equal(isGuestIdentity({ idp: 'https://sts.windows.net/other/' }, TENANT), true);
     assert.equal(isGuestIdentity({ preferred_username: 'a_b.c#ext#@t.onmicrosoft.com' }, TENANT), true);
+  });
+
+  it('merges a duplicate record when a sign-in-linked admin syncs to their primary email', () => {
+    const db = openDatabase(':memory:', { initialItAdmins: ['jane.upn@example.com', 'jane@example.com'] });
+    assert.equal(resolveStaffEmailForIdentity(db, { oid: 'oid-jane', emails: ['jane.upn@example.com'], bind: true }), 'jane.upn@example.com');
+    const result = syncDirectoryUsers(db, [
+      { id: 'oid-jane', accountEnabled: true, userType: 'Member', givenName: 'Jane', surname: 'Admin', mail: 'jane@example.com' },
+      { id: 'oid-bob', accountEnabled: true, userType: 'Member', givenName: 'Bob', surname: 'New', mail: 'bob@example.com' },
+    ], { ...DEFAULT_DIRECTORY_FILTERS, allowedDomains: [] }, 'test');
+    assert.equal(result.merged, 1);
+    assert.equal(result.created, 1);
+    const jane = db.prepare('SELECT id,email FROM staff WHERE entra_object_id=?').get('oid-jane');
+    assert.equal(jane.email, 'jane@example.com');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM staff WHERE email LIKE ?').get('jane%').n, 1);
+    assert.deepEqual(db.prepare('SELECT role FROM role_grants WHERE staff_id=?').all(jane.id).map((row) => row.role), ['it_admin']);
+    db.close();
   });
 });

@@ -105,6 +105,8 @@ export function syncDirectoryUsers(db, users, filters, actor, defaults = {}) {
   const { accepted, filtered } = filterDirectoryUsers(users, filters);
   let created = 0;
   let updated = 0;
+  let merged = 0;
+  const conflicts = [];
   db.exec('BEGIN IMMEDIATE');
   try {
     const byObjectId = db.prepare('SELECT * FROM staff WHERE entra_object_id=?');
@@ -125,6 +127,21 @@ export function syncDirectoryUsers(db, users, filters, actor, defaults = {}) {
         insert.run(user.email, firstName || displayParts[0] || user.email.split('@')[0], lastName || displayParts.slice(1).join(' '), title, phone, officeLocation, user.id || null, title, phone, officeLocation, Number(user.accountEnabled !== false), user.photoDataUrl ?? null, Number(defaults.visible ?? true), Number(defaults.applicable ?? true), Number(defaults.canSelfOptOut ?? false), Number(defaults.canChooseTagline ?? false), defaults.signatureIdentityMode ?? 'signed_in');
         created += 1;
       } else {
+        // A record linked by object ID (for example a bootstrap admin linked at sign-in by UPN) may now
+        // need the primary email already held by a separate, unlinked record. Merge that duplicate into
+        // the linked record rather than letting the UNIQUE email constraint abort the whole sync.
+        const holder = byEmail.get(user.email);
+        if (holder && holder.id !== existing.id) {
+          if (holder.entra_object_id) {
+            conflicts.push(user.email);
+            continue;
+          }
+          db.prepare('INSERT OR IGNORE INTO role_grants(staff_id,role,granted_by,granted_at) SELECT ?,role,granted_by,granted_at FROM role_grants WHERE staff_id=?').run(existing.id, holder.id);
+          db.prepare('INSERT OR IGNORE INTO audience_members(audience_id,staff_id,added_at) SELECT audience_id,?,added_at FROM audience_members WHERE staff_id=?').run(existing.id, holder.id);
+          db.prepare('DELETE FROM staff WHERE id=?').run(holder.id);
+          audit(db, actor, 'staff.merged_duplicate', 'staff', existing.id, { email: user.email, removedStaffId: holder.id });
+          merged += 1;
+        }
         update.run(user.email, firstName || existing.first_name, lastName || existing.last_name, user.id || existing.entra_object_id, title, phone, officeLocation, Number(user.accountEnabled !== false), existing.id);
         // A missing property means Graph failed transiently, so retain the last
         // good image. An explicit null means the user no longer has a photo.
@@ -132,13 +149,13 @@ export function syncDirectoryUsers(db, users, filters, actor, defaults = {}) {
         updated += 1;
       }
     }
-    audit(db, actor, 'directory.sync_completed', 'directory', 'entra', { fetched: users.length, matched: accepted.length, filtered, created, updated });
+    audit(db, actor, 'directory.sync_completed', 'directory', 'entra', { fetched: users.length, matched: accepted.length, filtered, created, updated, merged, conflicts });
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
-  return { fetched: users.length, matched: accepted.length, filtered, created, updated };
+  return { fetched: users.length, matched: accepted.length, filtered, created, updated, merged, conflicts: conflicts.length };
 }
 
 export function createGraphDirectoryProvider({ tenantId, clientId, clientSecret, fetchImpl = fetch }) {
