@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Added built-in Microsoft Entra ID sign-in for the browser picker and administration console (`AUTH_MODE=entra`), removing the need for Cloudflare Access. Uses the OpenID Connect authorization code flow with PKCE, the existing app registration and client secret, and an encrypted HttpOnly session cookie.
-- Signed-in users are matched to staff by Entra object ID, and sessions are re-checked on every request so removed, blocked or disabled staff lose access immediately.
+- Signed-in users are matched to staff by Entra object ID, falling back once to the user principal name for records not yet linked by directory sync. The mutable `email` claim is not used and B2B guests are refused. Sessions are re-checked on every request so removed or blocked staff lose access immediately.
 - Added a sign-out link to the administration console when Entra sign-in is enabled.
 - Cloudflare Access remains available as `AUTH_MODE=cloudflare` and is still the default.
 

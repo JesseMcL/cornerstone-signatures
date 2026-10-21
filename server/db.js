@@ -125,22 +125,27 @@ export function getStaffByEmail(db, email) {
   return hydrateStaff(db.prepare(`SELECT * FROM staff WHERE email=? COLLATE NOCASE`).get(String(email).toLowerCase()));
 }
 
-// Maps a signed-in Microsoft identity to a managed staff email. The Entra object ID is preferred
-// because it survives renames and UPN/mail differences. An email match is only accepted when the
-// staff record is not already bound to a different Entra object, and disabled accounts are refused.
-export function resolveStaffEmailForIdentity(db, { oid, emails = [] } = {}) {
+// Maps a signed-in Microsoft identity to a managed staff email. The Entra object ID is authoritative.
+// A principal-name match is only accepted for a record not yet linked to any Entra object; with
+// bind=true the record is then linked to this object ID so no other account can claim it afterwards.
+// Disabled accounts are refused.
+export function resolveStaffEmailForIdentity(db, { oid, emails = [], bind = false } = {}) {
   const usable = (staff) => staff && staff.directory_account_enabled !== 0 ? staff.email.toLowerCase() : null;
-  if (oid) {
-    const byObjectId = db.prepare('SELECT email,directory_account_enabled FROM staff WHERE entra_object_id=?').get(String(oid));
-    if (byObjectId) return usable(byObjectId);
-  }
-  const byEmail = db.prepare('SELECT email,entra_object_id,directory_account_enabled FROM staff WHERE email=? COLLATE NOCASE');
+  if (!oid) return null;
+  const byObjectId = db.prepare('SELECT email,directory_account_enabled FROM staff WHERE entra_object_id=?').get(String(oid));
+  if (byObjectId) return usable(byObjectId);
+  const byEmail = db.prepare('SELECT id,email,entra_object_id,directory_account_enabled FROM staff WHERE email=? COLLATE NOCASE');
   for (const email of emails) {
     if (typeof email !== 'string' || !email.includes('@')) continue;
     const staff = byEmail.get(email.trim().toLowerCase());
     if (!staff) continue;
-    if (staff.entra_object_id && oid && staff.entra_object_id !== String(oid)) return null;
-    return usable(staff);
+    if (staff.entra_object_id) return null;
+    const result = usable(staff);
+    if (result && bind) {
+      db.prepare('UPDATE staff SET entra_object_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND entra_object_id IS NULL').run(String(oid), staff.id);
+      audit(db, result, 'staff.entra_linked_at_sign_in', 'staff', staff.id, { entraObjectId: String(oid) });
+    }
+    return result;
   }
   return null;
 }

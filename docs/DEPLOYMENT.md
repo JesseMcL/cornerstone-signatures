@@ -22,11 +22,12 @@ The browser picker (`/`) and administration console (`/admin/`) need a signed-in
 The server signs users in with Microsoft itself using the OpenID Connect authorization code flow with PKCE, reusing the app registration and client secret from step 3. No external access proxy is required.
 
 1. Set `AUTH_MODE=entra` and a random `SESSION_SECRET` of at least 32 characters, for example from `openssl rand -base64 48`. Store it as a secret. Changing it signs everyone out.
-2. Optionally set `SESSION_TTL_SECONDS` (default 28800, eight hours). Sessions are re-checked against the staff database on every request, so removing or blocking a staff member, or disabling their Entra account and syncing, revokes access immediately.
-3. In the app registration, add a **Web** platform redirect URI of `https://YOUR_PUBLIC_HOST/auth/callback`, and a front-channel logout URL of `https://YOUR_PUBLIC_HOST/auth/signed-out` if you want sign-out to clear the Microsoft session.
-4. Recommended: in **Enterprise applications → Cornerstone Signatures → Properties**, set **Assignment required** to **Yes** and assign the staff group. Conditional Access and MFA policies then apply to the picker and admin console like any other Microsoft 365 app.
+2. Optionally set `SESSION_TTL_SECONDS` (default 28800, eight hours). Every request re-checks the session against the staff database, so removing or blocking a staff member revokes access immediately. Disabling an Entra account revokes access after the next directory sync marks it disabled.
+3. In the app registration, under **Authentication → Web**, add two redirect URIs: `https://YOUR_PUBLIC_HOST/auth/callback` (sign-in) and `https://YOUR_PUBLIC_HOST/auth/signed-out` (Microsoft only returns to registered URIs after sign-out). Do not configure a front-channel logout URL; signing out elsewhere ends the app session when it expires.
+4. **Strongly recommended:** in **Enterprise applications → Cornerstone Signatures → Properties**, set **Assignment required** to **Yes** and assign the staff group. Only assigned users can then sign in, and Conditional Access and MFA policies apply to the picker and admin console like any other Microsoft 365 app.
+5. If the container is exposed directly rather than behind a reverse proxy, set `TRUST_PROXY=false` so clients cannot spoof their IP to avoid rate limits.
 
-Signed-in users are matched to staff records by Entra object ID, falling back to the `email` or `preferred_username` claim until directory sync has linked the record. Only matched, enabled staff can sign in; management roles are still granted inside the application. Put the user principal name or primary email of each bootstrap admin in `INITIAL_IT_ADMINS`.
+Signed-in users are matched to staff records by Entra object ID. Until directory sync has linked a record, the user principal name is used instead, and the record is then permanently linked to that account. The mutable `email` claim is never used, and B2B guest accounts are refused. Management roles are still granted inside the application. Set `INITIAL_IT_ADMINS` to each bootstrap admin's user principal name (the address they sign in to Microsoft with) and have them sign in before the first directory sync. That first sign-in links the record to their account, and the next sync updates it to their primary email.
 
 Session cookies are `HttpOnly`, `SameSite=Lax`, AES-256-GCM encrypted, and use the `__Host-` prefix over HTTPS. State-changing admin requests still require an allowed `Origin` from `ADMIN_ALLOWED_ORIGINS`.
 
@@ -53,7 +54,7 @@ Create a single-tenant application registration and configure:
 3. Delegated Microsoft Graph `User.Read` with admin consent.
 4. Application Microsoft Graph `User.Read.All` with admin consent for server-side directory synchronization and profile photos.
 5. A client secret whose **value** is stored as `MICROSOFT_GRAPH_CLIENT_SECRET`. With `AUTH_MODE=entra` the same secret is used for browser sign-in.
-5a. With `AUTH_MODE=entra`, the Web redirect URI `https://YOUR_PUBLIC_HOST/auth/callback` (see step 2).
+5a. With `AUTH_MODE=entra`, the Web redirect URIs `https://YOUR_PUBLIC_HOST/auth/callback` and `https://YOUR_PUBLIC_HOST/auth/signed-out` (see step 2).
 6. The public-host identifier URI `api://YOUR_PUBLIC_HOST/CLIENT_ID` and access-token version 2 for classic Outlook.
 7. The Microsoft Office client application as an authorized client for the required delegated scope.
 

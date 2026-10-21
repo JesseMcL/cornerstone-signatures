@@ -8,7 +8,7 @@ import { createApp } from '../../server/app.js';
 import { createAccessAuthenticator } from '../../server/auth.js';
 import { assertProductionConfig } from '../../server/config.js';
 import { openDatabase, resolveStaffEmailForIdentity } from '../../server/db.js';
-import { createEntraLogin, parseCookies, safeReturnTo } from '../../server/entra-login.js';
+import { createEntraLogin, isGuestIdentity, parseCookies, safeReturnTo } from '../../server/entra-login.js';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const CLIENT = '22222222-2222-2222-2222-222222222222';
@@ -121,9 +121,38 @@ describe('Microsoft Entra sign-in', () => {
     assert.equal((await fetch(`${baseUrl}/api/admin/session`, { headers: { cookie: session } })).status, 403);
   });
 
-  it('matches a bootstrap admin by email until directory sync binds the object ID', async () => {
-    const { callback } = await signIn({ oid: 'oid-new', email: 'bootstrap@example.com' });
+  it('links a bootstrap admin by principal name once, then refuses other accounts', async () => {
+    const { callback } = await signIn({ oid: 'oid-boot', preferred_username: 'bootstrap@example.com' });
     assert.equal(callback.status, 303);
+    assert.equal(db.prepare('SELECT entra_object_id FROM staff WHERE email=?').get('bootstrap@example.com').entra_object_id, 'oid-boot');
+    assert.equal((await signIn({ oid: 'oid-other', preferred_username: 'bootstrap@example.com' })).callback.status, 403);
+  });
+
+  it('ignores the mutable email claim', async () => {
+    db.prepare('INSERT INTO staff(email,first_name,last_name) VALUES (?,?,?)').run('unlinked@example.com', 'Un', 'Linked');
+    assert.equal((await signIn({ oid: 'oid-x', email: 'unlinked@example.com', preferred_username: 'x@example.com' })).callback.status, 403);
+  });
+
+  it('rejects B2B guests even though their token carries this tenant', async () => {
+    db.prepare('INSERT INTO staff(email,first_name,last_name) VALUES (?,?,?)').run('guestable@example.com', 'G', 'U');
+    assert.equal((await signIn({ oid: 'oid-g1', preferred_username: 'guestable@example.com', idp: 'https://sts.windows.net/99999999-9999-9999-9999-999999999999/' })).callback.status, 403);
+    assert.equal((await signIn({ oid: 'oid-g2', preferred_username: 'guestable@example.com', idp: 'live.com' })).callback.status, 403);
+    assert.equal((await signIn({ oid: 'oid-g3', upn: 'someone_evil.test#EXT#@corp.onmicrosoft.com', preferred_username: 'guestable@example.com' })).callback.status, 403);
+    assert.equal((await signIn({ oid: 'oid-g4', preferred_username: 'guestable@example.com', acct: 1 })).callback.status, 403);
+  });
+
+  it('will not accept a session cookie as a login cookie', async () => {
+    const { session } = await signIn({ oid: 'oid-ada' });
+    const confused = session.replace('cs_session=', 'cs_login=');
+    const before = tokenRequests.length;
+    const response = await fetch(`${baseUrl}/auth/callback?code=x`, { headers: { cookie: confused }, redirect: 'manual' });
+    assert.equal(response.status, 400);
+    assert.equal(tokenRequests.length, before);
+  });
+
+  it('clears the session cookie on the signed-out page', async () => {
+    const response = await fetch(`${baseUrl}/auth/signed-out`);
+    assert.ok(response.headers.getSetCookie().some((value) => /^cs_session=;.*Max-Age=0/.test(value)));
   });
 
   it('returns 401 with a login URL when there is no session', async () => {
@@ -159,12 +188,12 @@ describe('Microsoft Entra sign-in', () => {
 
   it('rejects other tenants, unknown users and disabled accounts', async () => {
     assert.equal((await signIn({ oid: 'oid-ada', tid: '99999999-9999-9999-9999-999999999999' })).callback.status, 403);
-    assert.equal((await signIn({ oid: 'oid-stranger', email: 'stranger@example.com' })).callback.status, 403);
+    assert.equal((await signIn({ oid: 'oid-stranger', preferred_username: 'stranger@example.com' })).callback.status, 403);
     assert.equal((await signIn({ oid: 'oid-gone' })).callback.status, 403);
   });
 
-  it('refuses an email match that belongs to a different Entra object', async () => {
-    assert.equal((await signIn({ oid: 'oid-impostor', email: 'ada@example.com' })).callback.status, 403);
+  it('refuses a principal-name match for a record linked to a different Entra object', async () => {
+    assert.equal((await signIn({ oid: 'oid-impostor', preferred_username: 'ada@example.com' })).callback.status, 403);
   });
 
   it('revokes access when the staff record is removed', async () => {
@@ -206,6 +235,7 @@ describe('Entra sign-in helpers', () => {
     const options = { tenantId: TENANT, clientId: CLIENT, clientSecret: 's', publicBaseUrl: BASE, resolveStaffEmail: () => null };
     assert.throws(() => createEntraLogin({ ...options, sessionSecret: 'short' }), /SESSION_SECRET/);
     assert.throws(() => createEntraLogin({ ...options, clientSecret: '', sessionSecret: 'x'.repeat(32) }), /CLIENT_SECRET/);
+    assert.throws(() => createEntraLogin({ ...options, tenantId: 'contoso.onmicrosoft.com', sessionSecret: 'x'.repeat(32) }), /tenant GUID/);
     const secure = createEntraLogin({ ...options, sessionSecret: 'x'.repeat(32) });
     assert.deepEqual(secure.cookieNames, { session: '__Host-cs_session', login: '__Host-cs_login' });
   });
@@ -229,12 +259,23 @@ describe('Entra sign-in helpers', () => {
     assert.doesNotThrow(() => assertProductionConfig({ ...common, authMode: 'entra', microsoftGraphClientSecret: 's', sessionSecret: 'x'.repeat(32) }));
   });
 
-  it('resolves staff by object ID before email', () => {
+  it('resolves staff by object ID before principal name', () => {
     const db = openDatabase(':memory:');
     db.prepare('INSERT INTO staff(email,first_name,last_name,entra_object_id) VALUES (?,?,?,?)').run('mail@example.com', 'A', 'B', 'oid-1');
+    db.prepare('INSERT INTO staff(email,first_name,last_name) VALUES (?,?,?)').run('free@example.com', 'C', 'D');
     assert.equal(resolveStaffEmailForIdentity(db, { oid: 'oid-1', emails: ['upn@example.com'] }), 'mail@example.com');
     assert.equal(resolveStaffEmailForIdentity(db, { oid: 'oid-2', emails: ['mail@example.com'] }), null);
     assert.equal(resolveStaffEmailForIdentity(db, { oid: 'oid-3', emails: [] }), null);
+    assert.equal(resolveStaffEmailForIdentity(db, { emails: ['free@example.com'] }), null);
+    assert.equal(resolveStaffEmailForIdentity(db, { oid: 'oid-4', emails: ['free@example.com'] }), 'free@example.com');
+    assert.equal(db.prepare('SELECT entra_object_id FROM staff WHERE email=?').get('free@example.com').entra_object_id, null);
     db.close();
+  });
+
+  it('identifies guest tokens', () => {
+    assert.equal(isGuestIdentity({}, TENANT), false);
+    assert.equal(isGuestIdentity({ idp: `https://sts.windows.net/${TENANT}/` }, TENANT), false);
+    assert.equal(isGuestIdentity({ idp: 'https://sts.windows.net/other/' }, TENANT), true);
+    assert.equal(isGuestIdentity({ preferred_username: 'a_b.c#ext#@t.onmicrosoft.com' }, TENANT), true);
   });
 });
